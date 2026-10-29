@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -13,9 +14,9 @@
 #include <encoder.h>
 
 #include "app_config.h"
+#include "app_radio.h"
 #include "app_temperature.h"
 #include "app_wifi.h"
-
 #include "ui_driver.h"
 
 // Трюк для превращения числа в строку на этапе компиляции
@@ -33,6 +34,7 @@ const char *const STR_L2_0_2 = "Mode";
 const char *const STR_L2_0_3 = "Weather Comp:";
 const char *const STR_L2_0_4 = "Wi-Fi:";
 const char *const STR_L2_0_5 = "RF433 Sensor:";
+const char *const STR_L2_0_6 = "REBOOT:";
 
 const char *const STR_L2_1_0 = "Boiler FW: " TOSTRING(BOILER_CONFIG_VERSION);
 
@@ -53,7 +55,7 @@ menu_param_setings_t s_menu_param;
 QueueHandle_t input_queue = NULL;
 
 rotary_encoder_handle_t re_handle = NULL;
-volatile uint32_t last_user_action_time = 0;
+volatile uint32_t last_act_ms = 0;
 volatile bool force_carousel_reset = false;
 bool carousel_manual_mode = false;
 int32_t carousel_manual_page = 0;
@@ -72,7 +74,7 @@ void ui_sync_from_config(void) {
     s_menu_param.t_hysteresis = (int32_t)s_settings.t_hysteresis;
     s_menu_param.regulator_mode = (int32_t)s_settings.reg_mode;
     s_menu_param.wifi_enable = (int32_t)s_settings.wifi_enabled;
-    s_menu_param.rf433_enable = (int32_t)s_settings.rf433_take_account;
+    s_menu_param.rf433_enable = (int32_t)s_settings.rf433_enable;
     ESP_LOGD(TAG, "UI variables synchronized.");
 }
 
@@ -82,7 +84,7 @@ void ui_settings_save_all(void) {
     s_settings.t_hysteresis = (float)s_menu_param.t_hysteresis;
     s_settings.reg_mode = (int32_t)s_menu_param.regulator_mode;
     s_settings.wifi_enabled = (bool)s_menu_param.wifi_enable;
-    s_settings.rf433_take_account = (bool)s_menu_param.rf433_enable;
+    s_settings.rf433_enable = (bool)s_menu_param.rf433_enable;
     app_config_set(&s_settings);
     ESP_LOGI(TAG, "UI variables synchronized with AppConfig.");
 }
@@ -99,6 +101,25 @@ static void wifi_action_callback(setup_param_t *item) {
     } else {
         app_wifi_disable();
     }
+}
+
+static void menu_reboot_callback(setup_param_t *item) {
+    ESP_LOGW(TAG, "Executing %s callback. Value: %i", item->name, *item->val_ptr);
+    bool val = (bool)*item->val_ptr;
+    if (val) {
+        lcd_reset_home_carousel();
+        app_wifi_session_disable();
+        // Даем прокашляться секунду
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        // Перезагрузка устройства
+        esp_restart();
+    }
+}
+
+static void menu_rf433_callback(setup_param_t *item) {
+    ESP_LOGI(TAG, "Executing %s callback. Value: %i", item->name, *item->val_ptr);
+    bool val = (bool)*item->val_ptr;
+    app_rf433_switch_enable(val);
 }
 
 /* ======================== Инициализация =========================== */
@@ -147,7 +168,15 @@ void init_menu_ui(void) {
                                                .display_type = PARAM_TYPE_BOOL,
                                                .val_ptr = &s_menu_param.rf433_enable,
                                                .min_val = 0,
-                                               .max_val = 1};
+                                               .max_val = 1,
+                                               .callback = menu_rf433_callback};
+
+    s_param_list[UI_PARAM_6] = (setup_param_t){.name = STR_L2_0_6,
+                                               .display_type = PARAM_TYPE_BOOL,
+                                               .val_ptr = &s_menu_param.reboot,
+                                               .min_val = 0,
+                                               .max_val = 1,
+                                               .callback = menu_reboot_callback};
 
     input_queue = xQueueCreate(10, sizeof(input_event_t));
 

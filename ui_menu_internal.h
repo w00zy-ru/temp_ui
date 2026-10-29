@@ -19,23 +19,13 @@ typedef enum {
     UI_PARAM_3,
     UI_PARAM_4,
     UI_PARAM_5,
+    UI_PARAM_6,
     UI_PARAM_COUNT
 } ui_param_id_t;
 
-typedef enum {
-    VAL_TYPE_INT,
-    VAL_TYPE_FLOAT,
-    VAL_TYPE_INT8,
-    VAL_TYPE_STRING
-} ui_val_type_t;
+typedef enum { VAL_TYPE_INT, VAL_TYPE_FLOAT, VAL_TYPE_INT8, VAL_TYPE_STRING } ui_val_type_t;
 
-typedef enum {
-    SCR_PAGE_0 = 0,
-    SCR_PAGE_1,
-    SCR_PAGE_2,
-    SCR_PAGE_3,
-    SCR_PAGE_SZ
-} screen_page_t;
+typedef enum { SCR_PAGE_0 = 0, SCR_PAGE_1, SCR_PAGE_2, SCR_PAGE_3, SCR_PAGE_SZ } screen_page_t;
 
 typedef enum {
     EVENT_NONE,
@@ -76,6 +66,7 @@ typedef struct menu_param_setings_t {
     int32_t wifi_enable;
     int32_t rf433_enable;
     int32_t reserv;
+    int32_t reboot;
 } menu_param_setings_t;
 
 /* ======================== Макросы ======================== */
@@ -93,7 +84,7 @@ extern menu_param_setings_t s_menu_param;
 extern QueueHandle_t input_queue;
 extern rotary_encoder_handle_t re_handle;
 
-extern volatile uint32_t last_user_action_time;
+extern volatile uint32_t last_act_ms;
 extern volatile bool force_carousel_reset;
 extern bool carousel_manual_mode;
 extern int32_t carousel_manual_page;
@@ -110,6 +101,7 @@ extern const char *const STR_L2_0_2;
 extern const char *const STR_L2_0_3;
 extern const char *const STR_L2_0_4;
 extern const char *const STR_L2_0_5;
+extern const char *const STR_L2_0_6;
 
 extern const char *const STR_L2_1_0;
 

@@ -1,4 +1,5 @@
 #include "app_config.h"
+#include "app_temperature.h"
 #include "ui_menu_internal.h"
 
 #include <stdint.h>
@@ -20,12 +21,9 @@
 //
 // Вспомогательная структура для выгрузки температур
 typedef struct {
-    float t_tube;
-    float t_outside;
-    float t_room;
-    bool is_tube_error;
-    bool is_outside_error;
-    bool is_room_error;
+    TemperatureChannel_t tube;
+    TemperatureChannel_t outside;
+    TemperatureChannel_t room;
     bool _ok;
 } ui_local_temps_t;
 
@@ -55,13 +53,13 @@ static void ui_format_datetime_2004(char *line_time, char *line_date) {
     // Магия "%*s": вычисляем сколько пробелов нужно добавить для центрирования
     int time_len = strlen(raw_time);
     int time_padding = (20 - time_len) / 2;
-    snprintf(line_time, 21, "%*s%s%-*s", time_padding, "", raw_time,
-             20 - time_len - time_padding, "");
+    snprintf(line_time, 21, "%*s%s%-*s", time_padding, "", raw_time, 20 - time_len - time_padding,
+             "");
 
     int date_len = strlen(raw_date);
     int date_padding = (20 - date_len) / 2;
-    snprintf(line_date, 21, "%*s%s%-*s", date_padding, "", raw_date,
-             20 - date_len - date_padding, "");
+    snprintf(line_date, 21, "%*s%s%-*s", date_padding, "", raw_date, 20 - date_len - date_padding,
+             "");
 }
 
 /* ======================== lcd_clear ======================== */
@@ -91,8 +89,7 @@ void ui_format_split_line(char *out_buf, const char *text_left, const void *valu
         snprintf(right_part_buf, sizeof(right_part_buf), "%.1f%s", float_val, unit_right);
     } else if (type == VAL_TYPE_INT) {
         int32_t int_val = *(const int32_t *)value;
-        snprintf(right_part_buf, sizeof(right_part_buf), "%" PRId32 "%s", int_val,
-                 unit_right);
+        snprintf(right_part_buf, sizeof(right_part_buf), "%" PRId32 "%s", int_val, unit_right);
     } else if (type == VAL_TYPE_INT8) {
         // Явно приводим к int8_t, печатаем через стандартный d
         int8_t int8_val = *(const int8_t *)value;
@@ -103,8 +100,8 @@ void ui_format_split_line(char *out_buf, const char *text_left, const void *valu
         if (max_chars_to_read < 0)
             max_chars_to_read = 0;
 
-        snprintf(right_part_buf, sizeof(right_part_buf), "%.*s%s", max_chars_to_read,
-                 str_val, unit_right);
+        snprintf(right_part_buf, sizeof(right_part_buf), "%.*s%s", max_chars_to_read, str_val,
+                 unit_right);
     }
 
     /* ЭТАП 2: Собираем финальную строку */
@@ -148,8 +145,7 @@ void lcd_refresh_smart_2004(const char *line0, const char *line1, const char *li
     snprintf(input_buffers[3], 21, "%-20.20s", line3 ? line3 : "");
 
     for (uint8_t row = 0; row < 4; row++) {
-        bool need_cursor_positioning =
-            true; // Флаг: нужно ли принудительно выставить курсор
+        bool need_cursor_positioning = true; // Флаг: нужно ли принудительно выставить курсор
 
         for (uint8_t col = 0; col < 20; col++) {
             char new_char = input_buffers[row][col];
@@ -191,23 +187,23 @@ void lcd_start_screen(char lines_buf[4][32], bool is_auto_carousel) {
     static screen_page_t current_page = SCR_PAGE_0;
     static uint32_t last_page_switch_time = 0;
 
-    uint32_t now = esp_timer_get_time() / 1000;
+    uint32_t now_ms = app_get_time_ms32();
 
     if (force_carousel_reset) {
         current_page = SCR_PAGE_0;
-        last_page_switch_time = now;
+        last_page_switch_time = now_ms;
         force_carousel_reset = false;
         carousel_manual_mode = false;
         lcd_refresh_smart_2004(" ", " ", " ", " ", true);
     }
 
     if (is_auto_carousel && !carousel_manual_mode) {
-        if ((now - last_page_switch_time) >= 10000) {
+        if ((now_ms - last_page_switch_time) >= 10000) {
             current_page++;
             if (current_page >= 2) {
                 current_page = SCR_PAGE_0;
             }
-            last_page_switch_time = now;
+            last_page_switch_time = now_ms;
             lcd_refresh_smart_2004(" ", " ", " ", " ", true);
         }
     }
@@ -225,55 +221,52 @@ void lcd_start_screen(char lines_buf[4][32], bool is_auto_carousel) {
         WITH_TEMPERATURE_LOCK() {
             // Геттер просто отдает прямой адрес скрытого массива
             const TemperatureStorage_t *s_temp = temperature_get_reference();
-            t_page.t_tube = s_temp->channels[CH_INDEX_PIPE].temperature;
-            t_page.is_tube_error = s_temp->channels[CH_INDEX_PIPE].is_error;
-            t_page.t_outside = s_temp->channels[CH_INDEX_OUTDOOR].temperature;
-            t_page.is_outside_error = s_temp->channels[CH_INDEX_OUTDOOR].is_error;
-            t_page.t_room = s_temp->channels[CH_INDEX_ROOM].temperature;
+            t_page.tube.temperature = s_temp->channels[CH_INDEX_PIPE].temperature;
+            t_page.tube.status = s_temp->channels[CH_INDEX_PIPE].status;
+
+            t_page.outside.temperature = s_temp->channels[CH_INDEX_OUTDOOR].temperature;
+            t_page.outside.status = s_temp->channels[CH_INDEX_OUTDOOR].status;
+            t_page.outside.replace = s_temp->channels[CH_INDEX_OUTDOOR].replace;
+
+            t_page.room.temperature = s_temp->channels[CH_INDEX_ROOM].temperature;
+            t_page.room.replace = s_temp->channels[CH_INDEX_ROOM].replace;
+            t_page.room.status = s_temp->channels[CH_INDEX_ROOM].status;
             // Быстрая разблокировка
         }
 
         // собираем строки начиная с первой
-        ui_format_split_line(lines_buf[0], UI_PAGES_STR[0], &t_page.t_room,
+        ui_format_split_line(lines_buf[0], UI_PAGES_STR[0], &t_page.room.temperature,
                              VAL_TYPE_FLOAT, STR_UNIT_CELSIUS);
 
         if (display_page == SCR_PAGE_0) {
             // Смотрим, по какому датчику принимать показания уличной температуры.
             // приоритет проводному, но если он в ошибке, то пробуем выносной
-            if (t_page.is_outside_error ||
-                IS_TEMP_OUTSIDE_OUT_OF_RANGE(t_page.t_outside)) {
-                float t_temp = NAN;
+            if (t_page.outside.status != SENSOR_STATUS_OK) {
 
-                WITH_RADIO433_LOCK() {
-                    const radio433_data_t *rdt = radio433_get_reference();
-                    if (rdt)
-                        t_temp = rdt->temperature;
-                }
-
-                if (isnan(t_temp)) {
-                    ui_format_split_line(lines_buf[1], UI_PAGES_STR[1], "ERROR",
-                                         VAL_TYPE_STRING, "");
-                } else {
-                    ui_format_split_line(lines_buf[1], UI_PAGES_STR[14], &t_temp,
-                                         VAL_TYPE_FLOAT, STR_UNIT_CELSIUS);
-                }
+                ui_format_split_line(lines_buf[1], UI_PAGES_STR[1], "ERROR", VAL_TYPE_STRING, "");
 
             } else {
-                ui_format_split_line(lines_buf[1], UI_PAGES_STR[1], &t_page.t_outside,
-                                     VAL_TYPE_FLOAT, STR_UNIT_CELSIUS);
+
+                if (t_page.outside.replace == RF433_TEMP_CHANNEL) {
+                    ui_format_split_line(lines_buf[1], UI_PAGES_STR[14],
+                                         &t_page.outside.temperature, VAL_TYPE_FLOAT,
+                                         STR_UNIT_CELSIUS);
+                } else {
+                    ui_format_split_line(lines_buf[1], UI_PAGES_STR[1], &t_page.outside.temperature,
+                                         VAL_TYPE_FLOAT, STR_UNIT_CELSIUS);
+                }
             }
 
             WITH_CLIMAT_LOCK() {
-                const ClimateStorage_t *climat = app_climate_storage_get();
-                if (climat->ch0_ok) {
-                    int val = (int)(climat->ch0_h + 0.5f);
-                    ui_format_split_line(lines_buf[2], UI_PAGES_STR[2], &val,
-                                         VAL_TYPE_INT, " %");
+                const ClimateChannel_t *climat = app_climate_storage_get();
+                if (climat->ch0.status == SENSOR_STATUS_OK) {
+                    int val = (int)(climat->ch0.value.h + 0.5f);
+                    ui_format_split_line(lines_buf[2], UI_PAGES_STR[2], &val, VAL_TYPE_INT, " %");
                 }
-                if (climat->ch1_ok) {
-                    int mmrst = (int)((climat->ch1_p * 0.00750062f) + 0.5f);
-                    ui_format_split_line(lines_buf[3], UI_PAGES_STR[3], &mmrst,
-                                         VAL_TYPE_INT, " mm.");
+                if (climat->ch1.status == SENSOR_STATUS_OK) {
+                    int mmrst = (int)((climat->ch1.value.p * 0.00750062f) + 0.5f);
+                    ui_format_split_line(lines_buf[3], UI_PAGES_STR[3], &mmrst, VAL_TYPE_INT,
+                                         " mm.");
                 }
             }
 
@@ -309,8 +302,7 @@ void lcd_start_screen(char lines_buf[4][32], bool is_auto_carousel) {
                 }
 
                 // Безопасно собираем строку: "Tube T:" + стрелочки
-                snprintf(left_text_buf, sizeof(left_text_buf), "%s%s", UI_PAGES_STR[4],
-                         anim_str);
+                snprintf(left_text_buf, sizeof(left_text_buf), "%s%s", UI_PAGES_STR[4], anim_str);
 
                 // Инкрементируем счетчик кадров (0, 1, 2, 3)
                 heat_anim_frame = (heat_anim_frame + 1) % 4;
@@ -322,10 +314,9 @@ void lcd_start_screen(char lines_buf[4][32], bool is_auto_carousel) {
             }
 
             ui_format_split_line(lines_buf[1], UI_PAGES_STR[7],
-                                 reg_mode_to_string(s_settings.reg_mode), VAL_TYPE_STRING,
-                                 "");
+                                 reg_mode_to_string(s_settings.reg_mode), VAL_TYPE_STRING, "");
 
-            ui_format_split_line(lines_buf[2], left_text_buf, &t_page.t_tube,
+            ui_format_split_line(lines_buf[2], left_text_buf, &t_page.tube.temperature,
                                  VAL_TYPE_FLOAT, STR_UNIT_CELSIUS);
 
             ui_format_split_line(lines_buf[3], UI_PAGES_STR[5], &target, VAL_TYPE_INT,
@@ -340,14 +331,13 @@ void lcd_start_screen(char lines_buf[4][32], bool is_auto_carousel) {
 
         ui_format_datetime_2004(lines_buf[0], lines_buf[1]);
 
-        ui_format_split_line(lines_buf[2], UI_PAGES_STR[7],
-                             reg_mode_to_string(s_settings.reg_mode), VAL_TYPE_STRING,
-                             "");
+        ui_format_split_line(lines_buf[2], UI_PAGES_STR[7], reg_mode_to_string(s_settings.reg_mode),
+                             VAL_TYPE_STRING, "");
 
         WITH_STATUS_LOCK() {
             const app_status_t *l_status = app_status_reference_get();
-            ui_format_split_line(lines_buf[3], UI_PAGES_STR[8],
-                                 l_status->relay ? "ON" : "OFF", VAL_TYPE_STRING, "");
+            ui_format_split_line(lines_buf[3], UI_PAGES_STR[8], l_status->relay ? "ON" : "OFF",
+                                 VAL_TYPE_STRING, "");
         }
 
     }
@@ -357,20 +347,18 @@ void lcd_start_screen(char lines_buf[4][32], bool is_auto_carousel) {
     case SCR_PAGE_3: {
 
         if (wifi_is_connected()) {
-            const char *ssid_buffer = get_ssid_string(false);
+            const char *ssid_buffer = get_ssid_string();
             int8_t rssi = get_wifi_quality_percentage();
             // wifi_connected_info(ssid_buffer, sizeof(ssid_buffer), &rssi);
-            ui_format_split_line(lines_buf[0], UI_PAGES_STR[9], ssid_buffer,
-                                 VAL_TYPE_STRING, "");
-            ui_format_split_line(lines_buf[1], UI_PAGES_STR[10], &(rssi), VAL_TYPE_INT8,
-                                 "%");
+            ui_format_split_line(lines_buf[0], UI_PAGES_STR[9], ssid_buffer, VAL_TYPE_STRING, "");
+            ui_format_split_line(lines_buf[1], UI_PAGES_STR[10], &(rssi), VAL_TYPE_INT8, "%");
         } else {
             if (s_settings.wifi_enabled) {
-                ui_format_split_line(lines_buf[0], STR_L2_0_4, UI_PAGES_STR[11],
-                                     VAL_TYPE_STRING, "");
+                ui_format_split_line(lines_buf[0], STR_L2_0_4, UI_PAGES_STR[11], VAL_TYPE_STRING,
+                                     "");
             } else {
-                ui_format_split_line(lines_buf[1], STR_L2_0_4, UI_PAGES_STR[12],
-                                     VAL_TYPE_STRING, "");
+                ui_format_split_line(lines_buf[1], STR_L2_0_4, UI_PAGES_STR[12], VAL_TYPE_STRING,
+                                     "");
             }
         }
     }
@@ -388,7 +376,7 @@ void lcd_start_screen(char lines_buf[4][32], bool is_auto_carousel) {
 /* ======================== about_screen ======================== */
 
 void about_screen(char lines_buf[4][32]) {
-    uint32_t uptime_sec = (uint32_t)(esp_timer_get_time() / 1000000ULL);
+    uint32_t uptime_sec = app_get_time_sec();
     char formatted_time[10] = {0};
     format_uptime_string(formatted_time, sizeof(formatted_time), uptime_sec);
     snprintf(lines_buf[1], 32, "%-11.11s%9s", UI_PAGES_STR[6], formatted_time);
@@ -398,17 +386,13 @@ void about_screen(char lines_buf[4][32]) {
         char ssid_buffer[33] = {0};
         int8_t rssi;
         wifi_connected_info(ssid_buffer, sizeof(ssid_buffer), &rssi);
-        ui_format_split_line(lines_buf[2], UI_PAGES_STR[9], &(ssid_buffer),
-                             VAL_TYPE_STRING, "");
-        ui_format_split_line(lines_buf[3], UI_PAGES_STR[13], &(rssi), VAL_TYPE_INT8,
-                             "dBm");
+        ui_format_split_line(lines_buf[2], UI_PAGES_STR[9], &(ssid_buffer), VAL_TYPE_STRING, "");
+        ui_format_split_line(lines_buf[3], UI_PAGES_STR[13], &(rssi), VAL_TYPE_INT8, "dBm");
     } else {
         if (s_settings.wifi_enabled) {
-            snprintf(lines_buf[2], sizeof(lines_buf[2]), "%s %s", STR_L2_0_4,
-                     UI_PAGES_STR[11]);
+            snprintf(lines_buf[2], sizeof(lines_buf[2]), "%s %s", STR_L2_0_4, UI_PAGES_STR[11]);
         } else {
-            snprintf(lines_buf[2], sizeof(lines_buf[2]), "%s %s", STR_L2_0_4,
-                     UI_PAGES_STR[12]);
+            snprintf(lines_buf[2], sizeof(lines_buf[2]), "%s %s", STR_L2_0_4, UI_PAGES_STR[12]);
         }
         snprintf(lines_buf[3], sizeof(lines_buf[3]), "%s", "");
     }

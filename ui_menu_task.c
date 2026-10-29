@@ -9,6 +9,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "function.h"
 
 #include <encoder.h>
 
@@ -18,7 +19,7 @@ static const char *TAG = "UI_TASK";
 
 void encoder_event_callback(const rotary_encoder_event_t *event, void *ctx) {
     input_event_t menu_event = EVENT_NONE;
-    last_user_action_time = esp_timer_get_time() / 1000;
+    last_act_ms = app_get_time_ms32();
     if (event->type == RE_ET_CHANGED)
         menu_event = (event->diff > 0) ? EVENT_ROTATE_RIGHT : EVENT_ROTATE_LEFT;
     else if (event->type == RE_ET_BTN_CLICKED)
@@ -43,9 +44,8 @@ void ui_task(void *pvParameters) {
     lcd_clear();
 
     while (1) {
-        bool in_menu =
-            (local_state == STATE_MENU_L1 || local_state == STATE_MENU_L2 ||
-             local_state == STATE_EDIT_VALUE || local_state == STATE_ABOUT_SCREEN);
+        bool in_menu = (local_state == STATE_MENU_L1 || local_state == STATE_MENU_L2 ||
+                        local_state == STATE_EDIT_VALUE || local_state == STATE_ABOUT_SCREEN);
 
         TickType_t wait_ticks = in_menu ? pdMS_TO_TICKS(1000) : pdMS_TO_TICKS(500);
 
@@ -54,7 +54,7 @@ void ui_task(void *pvParameters) {
                 /* === РЕЖИМ КАРУСЕЛИ (не меню) === */
                 if (event == EVENT_LONG_PRESS) {
                     ESP_LOGI(TAG, "Entering Menu Mode.");
-                    last_user_action_time = esp_timer_get_time() / 1000;
+                    last_act_ms = app_get_time_ms32();
                     local_state = STATE_MENU_L1;
                     local_l1_idx = 0;
 
@@ -69,14 +69,13 @@ void ui_task(void *pvParameters) {
 
                     if (carousel_click_counter >= CAROUSEL_DEBOUNCE_CLICKS) {
                         if (event == EVENT_ROTATE_RIGHT) {
-                            carousel_manual_page =
-                                (carousel_manual_page + 1) % SCR_PAGE_SZ;
+                            carousel_manual_page = (carousel_manual_page + 1) % SCR_PAGE_SZ;
                         } else {
                             carousel_manual_page =
                                 (carousel_manual_page + SCR_PAGE_SZ - 1) % SCR_PAGE_SZ;
                         }
                         carousel_click_counter = 0;
-                        last_user_action_time = esp_timer_get_time() / 1000;
+                        last_act_ms = app_get_time_ms32();
                         ESP_LOGD(TAG,
                                  "Carousel manual switch to page %d (after %d "
                                  "clicks)",
@@ -140,8 +139,7 @@ void ui_task(void *pvParameters) {
 
                 if (event == EVENT_ROTATE_RIGHT && *(item->val_ptr) < item->max_val) {
                     (*(item->val_ptr))++;
-                } else if (event == EVENT_ROTATE_LEFT &&
-                           *(item->val_ptr) > item->min_val) {
+                } else if (event == EVENT_ROTATE_LEFT && *(item->val_ptr) > item->min_val) {
                     (*(item->val_ptr))--;
 
                 } else if (event == EVENT_SHORT_PRESS) {
@@ -193,8 +191,7 @@ void ui_task(void *pvParameters) {
                             char val_buf[12] = {0};
 
                             if (item.display_type == PARAM_TYPE_INT) {
-                                snprintf(val_buf, sizeof(val_buf), "%" PRId32,
-                                         *(item.val_ptr));
+                                snprintf(val_buf, sizeof(val_buf), "%" PRId32, *(item.val_ptr));
                             } else if (item.display_type == PARAM_TYPE_ENUM &&
                                        item.enum_to_str != NULL) {
                                 snprintf(val_buf, sizeof(val_buf), "%s",
@@ -204,29 +201,25 @@ void ui_task(void *pvParameters) {
                                          *(item.val_ptr) ? "ON" : "OFF");
                             }
 
-                            snprintf(lines_buf[i], sizeof(lines_buf[i]),
-                                     "%c%-13.13s%6.6s",
-                                     (local_l2_idx == item_idx) ? '>' : ' ', item.name,
-                                     val_buf);
+                            snprintf(lines_buf[i], sizeof(lines_buf[i]), "%c%-13.13s%6.6s",
+                                     (local_l2_idx == item_idx) ? '>' : ' ', item.name, val_buf);
                         } else {
                             snprintf(lines_buf[i], sizeof(lines_buf[i]), " ");
                         }
                     }
-                    lcd_refresh_smart_2004(lines_buf[0], lines_buf[1], lines_buf[2],
-                                           lines_buf[3], false);
+                    lcd_refresh_smart_2004(lines_buf[0], lines_buf[1], lines_buf[2], lines_buf[3],
+                                           false);
                 } else if (local_state == STATE_EDIT_VALUE) {
                     setup_param_t item = s_param_list[local_l2_idx];
 
                     snprintf(lines_buf[0], sizeof(lines_buf[0]),
-                             (*(item.val_ptr) != backup_val) ? STR_EDIT_UNSAVED
-                                                             : STR_EDIT_PREFIX,
+                             (*(item.val_ptr) != backup_val) ? STR_EDIT_UNSAVED : STR_EDIT_PREFIX,
                              item.name);
 
                     if (item.display_type == PARAM_TYPE_INT) {
                         snprintf(lines_buf[1], sizeof(lines_buf[1]), STR_VAL_INT_FMT,
                                  *(item.val_ptr));
-                    } else if (item.display_type == PARAM_TYPE_ENUM &&
-                               item.enum_to_str != NULL) {
+                    } else if (item.display_type == PARAM_TYPE_ENUM && item.enum_to_str != NULL) {
                         snprintf(lines_buf[1], sizeof(lines_buf[1]), "Val: < %s >",
                                  item.enum_to_str(*(item.val_ptr)));
                     } else {
@@ -237,12 +230,12 @@ void ui_task(void *pvParameters) {
                     snprintf(lines_buf[2], sizeof(lines_buf[2]), "[Click] -> Cancel");
                     snprintf(lines_buf[3], sizeof(lines_buf[3]), "[Hold]  -> Save");
 
-                    lcd_refresh_smart_2004(lines_buf[0], lines_buf[1], lines_buf[2],
-                                           lines_buf[3], false);
+                    lcd_refresh_smart_2004(lines_buf[0], lines_buf[1], lines_buf[2], lines_buf[3],
+                                           false);
                 } else if (local_state == STATE_ABOUT_SCREEN) {
                     about_screen(lines_buf);
-                    lcd_refresh_smart_2004(lines_buf[0], lines_buf[1], lines_buf[2],
-                                           lines_buf[3], true);
+                    lcd_refresh_smart_2004(lines_buf[0], lines_buf[1], lines_buf[2], lines_buf[3],
+                                           true);
                 }
             }
         }
@@ -251,9 +244,9 @@ void ui_task(void *pvParameters) {
         if (local_state == (menu_state_t)-1) {
             ui_sync_from_config();
 
-            uint32_t now = esp_timer_get_time() / 1000;
+            uint32_t now_ms = app_get_time_ms32();
             bool is_auto_carousel =
-                !carousel_manual_mode || ((now - last_user_action_time) >= 30000);
+                !carousel_manual_mode || ((now_ms - last_act_ms) >= 30000);
             if (carousel_manual_mode && is_auto_carousel) {
                 carousel_manual_mode = false;
                 carousel_manual_page = 0;
@@ -264,8 +257,8 @@ void ui_task(void *pvParameters) {
 
         /* --- АВТО-ВЫХОД ПО ТАЙМАУТУ --- */
         if (in_menu) {
-            uint32_t now = esp_timer_get_time() / 1000;
-            if ((now - last_user_action_time) >= MENU_TIMEOUT_MS) {
+            uint32_t now_ms = app_get_time_ms32();
+            if ((now_ms - last_act_ms) >= MENU_TIMEOUT_MS) {
                 ESP_LOGW(TAG, "Menu timeout! Auto-closing.");
                 if (local_state == STATE_EDIT_VALUE) {
                     /* НЕ ЗАБЫВАЕМ ДОБАВЛЯТЬ СЮДА РЕДАКТИРУЕМЫЕ ПАРАМЕТРЫ!!!! */
